@@ -302,11 +302,30 @@ function half(x){return Math.round(x*2)/2}
 function ieltsRound(avg){const f=avg-Math.floor(avg);return f<0.25?Math.floor(avg):f<0.75?Math.floor(avg)+0.5:Math.ceil(avg);}
 function bandToLv(b){return b>=8.5?5:b>=7?4:b>=5.5?3:b>=4?2:b>=3?1:0}
 // ---------- SCREENS
-function render(){if(location.hash==='#certificate'){document.getElementById('steps').innerHTML='';const t=document.getElementById('timer');t.textContent='Teacher';t.classList.remove('low');clearInterval(tick);app.innerHTML=teacherCert();bindCert();return;}if(configured&&!S.code){document.getElementById('steps').innerHTML='';app.innerHTML=needBot();return;}drawSteps();runTimer();window.scrollTo(0,0);
+function render(){const certCode=(new URLSearchParams(location.search).get('cert')||'').replace(/[^A-Za-z0-9]/g,'');
+  if(certCode){document.getElementById('steps').innerHTML='';const t=document.getElementById('timer');t.textContent='Certificate';t.classList.remove('low');clearInterval(tick);
+    app.innerHTML=`<section class="card"><p class="eyebrow">IELTS Level Check</p><h1>Your certificate</h1><p class="muted" id="cvmsg">Loading your result…</p><div id="cvbox"></div></section>`;loadCertView(certCode);return;}
+  if(location.hash==='#certificate'){document.getElementById('steps').innerHTML='';const t=document.getElementById('timer');t.textContent='Teacher';t.classList.remove('low');clearInterval(tick);app.innerHTML=teacherCert();bindCert();return;}if(configured&&!S.code){document.getElementById('steps').innerHTML='';app.innerHTML=needBot();return;}drawSteps();runTimer();window.scrollTo(0,0);
   const f={start,Lintro,L,Rintro,R,Wintro,W,Sintro,S1,S2,S3,results:resultsScreen}[S.screen]||start;
   app.innerHTML=f();bind();}
 function go(sc){S.screen=sc;save();render();}
 
+async function loadCertView(code){
+  const msg=document.getElementById('cvmsg'),box=document.getElementById('cvbox');
+  try{
+    if(!configured)throw new Error('This copy of the test is not connected.');
+    const res=await fetch(RELAY_URL+'?action=result&code='+encodeURIComponent(code));const r=await res.json();
+    if(!r.ok){msg.textContent='Your certificate is not ready yet. You will get a message in Telegram when it is ready.';return;}
+    const d=certData(r.name,r.date||new Date().toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'}),r.L,r.R,r.W,r.S);const cv=await drawCert(d);
+    msg.textContent=`${r.name} · Overall ${d.overall.lv<0?'Pre-A1':LV[d.overall.lv]} · IELTS ${d.overall.band.toFixed(1)}`;
+    const fname=`${String(r.name).replace(/[^\w\- ]+/g,'').trim().replace(/\s+/g,'_')||'student'}_Level_Certificate.png`;
+    box.innerHTML=`<img id="cvimg" alt="Your certificate" style="width:100%;border:1px solid var(--line);border-radius:8px;background:#fff">
+      <div class="row"><button class="primary" id="cvdl">Download certificate (PNG)</button><span class="small muted" id="cvdlmsg"></span></div>
+      ${r.feedback?`<h2>Feedback</h2><div class="text" style="white-space:pre-line">${esc(r.feedback)}</div>`:''}`;
+    document.getElementById('cvimg').src=cv.toDataURL('image/png');
+    document.getElementById('cvdl').addEventListener('click',()=>offerDownload(cv,fname,document.getElementById('cvdlmsg')));
+  }catch(e){msg.textContent='Could not load your certificate. Please check your internet connection and try again.';}
+}
 function needBot(){return `<section class="card"><p class="eyebrow">IELTS Level Check</p><h1>Get your personal test link</h1>
  <p>To take the test, open our Telegram bot and press <b>Start</b>. The bot will send you your personal link and instructions, and your results will come back to you in the same chat.</p>
  ${hasBot?`<div class="row"><button class="primary" data-href="${esc(BOT_LINK)}">Open the Telegram bot</button></div>`:''}</section>`;}
@@ -551,13 +570,13 @@ function stopRec(){
 // ---------- SENDING (to the teacher's Telegram via the relay)
 function b64(blob){return new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(String(fr.result).split(',')[1]);fr.onerror=rej;fr.readAsDataURL(blob);});}
 async function sendAll(){
-  const btn=document.getElementById('send'),msg=document.getElementById('sendmsg');btn.disabled=true;msg.textContent='Sending… please keep this page open.';
+  const btn=document.getElementById('send'),msg=document.getElementById('sendmsg');btn.disabled=true;msg.textContent='Sending… this can take up to 1 minute. Please keep this page open.';
   try{
     const x=results();const date=new Date(S.finishedAt||Date.now()).toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'});
     const files=[];for(let p=0;p<3;p++){if(audio[p]){const ext=/mp4/.test(audio[p].type)?'m4a':/ogg/.test(audio[p].type)?'ogg':'webm';files.push({filename:`${S.name.replace(/[^\w\- ]+/g,'').trim().replace(/\s+/g,'_')||'student'}_Speaking_Part${p+1}.${ext}`,mime:audio[p].type||'audio/webm',caption:`🎧 ${S.name} – Speaking Part ${p+1}`,data:await b64(audio[p])});}}
     const lvl=(r)=>`${r.lv<0?'Below A1':LV[r.lv]} · IELTS ${r.band.toFixed(1)}`;
     const studentText=`✅ Thank you, ${S.name}! We have received your test.\n\nListening: ${lvl(x.L)}\nReading: ${lvl(x.R)}\nListening + Reading: IELTS ${x.overall.toFixed(1)} (${LVX(x.olv)})`;
-    const res=await fetch(RELAY_URL,{method:'POST',body:JSON.stringify({action:'submit',code:S.code,name:S.name,messages:msgs(x,date),files,studentText})});
+    const res=await fetch(RELAY_URL,{method:'POST',body:JSON.stringify({action:'submit',code:S.code,name:S.name,date,result:{L:x.L.band,R:x.R.band},messages:msgs(x,date),files,studentText})});
     const out=await res.json().catch(()=>({ok:res.ok}));
     if(!out.ok)throw new Error(out.error||'');
     S.sent=true;save();render();
